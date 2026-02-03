@@ -17,9 +17,13 @@
     "--gpus",
     "all"
   ],
+  "forwardPorts": [
+    8080
+  ],
   "postCreateCommand": "git lfs install || true",
   "mounts": [
-    "source=${localEnv:USERPROFILE}\\.codex,target=/root/.codex,type=bind,consistency=cached"
+    "source=${localEnv:USERPROFILE}\\.codex,target=/root/.codex,type=bind,consistency=cached",
+    "source=${localWorkspaceFolder}/../models,target=/models,type=bind,consistency=cached"
   ],
   "customizations": {
     "vscode": {

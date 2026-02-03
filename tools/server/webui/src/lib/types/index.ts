@@ -25,6 +25,8 @@ export type {
 	ApiRouterModelMeta,
 	ApiRouterModelsLoadRequest,
 	ApiRouterModelsLoadResponse,
+	ApiRouterModelsBootstrapRequest,
+	ApiRouterModelsBootstrapResponse,
 	ApiRouterModelsStatusRequest,
 	ApiRouterModelsStatusResponse,
 	ApiRouterModelsListResponse,

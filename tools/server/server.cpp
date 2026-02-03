@@ -160,6 +160,7 @@ int main(int argc, char ** argv) {
         routes.get_models = models_routes->get_router_models;
         ctx_http.post("/models/load",   ex_wrapper(models_routes->post_router_models_load));
         ctx_http.post("/models/unload", ex_wrapper(models_routes->post_router_models_unload));
+        ctx_http.post("/models/bootstrap", ex_wrapper(models_routes->post_router_models_bootstrap));
     }
 
     ctx_http.get ("/health",              ex_wrapper(routes.get_health)); // public endpoint (no API key check)

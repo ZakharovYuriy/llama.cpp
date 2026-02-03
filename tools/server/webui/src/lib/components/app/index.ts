@@ -73,3 +73,4 @@ export { default as ModelsSelector } from './models/ModelsSelector.svelte';
 export { default as ServerStatus } from './server/ServerStatus.svelte';
 export { default as ServerErrorSplash } from './server/ServerErrorSplash.svelte';
 export { default as ServerLoadingSplash } from './server/ServerLoadingSplash.svelte';
+export { default as ServerBootstrap } from './server/ServerBootstrap.svelte';

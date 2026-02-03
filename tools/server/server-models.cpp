@@ -12,6 +12,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <cctype>
 #include <cstring>
 #include <atomic>
 #include <chrono>
@@ -402,6 +403,54 @@ static std::vector<char *> to_char_ptr_array(const std::vector<std::string> & ve
     return result;
 }
 
+static std::vector<std::string> split_cli_args(const std::string & input) {
+    std::vector<std::string> out;
+    std::string cur;
+    bool in_single = false;
+    bool in_double = false;
+    bool escaping = false;
+
+    auto flush = [&]() {
+        if (!cur.empty()) {
+            out.push_back(cur);
+            cur.clear();
+        }
+    };
+
+    for (size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+        if (escaping) {
+            cur.push_back(c);
+            escaping = false;
+            continue;
+        }
+        if (!in_single && c == '\\') {
+            escaping = true;
+            continue;
+        }
+        if (!in_double && c == '\'') {
+            in_single = !in_single;
+            continue;
+        }
+        if (!in_single && c == '"') {
+            in_double = !in_double;
+            continue;
+        }
+        if (!in_single && !in_double && std::isspace(static_cast<unsigned char>(c))) {
+            flush();
+            continue;
+        }
+        cur.push_back(c);
+    }
+
+    if (escaping || in_single || in_double) {
+        throw std::invalid_argument("unterminated quote or escape in args string");
+    }
+
+    flush();
+    return out;
+}
+
 std::vector<server_model_meta> server_models::get_all_meta() {
     std::lock_guard<std::mutex> lk(mutex);
     std::vector<server_model_meta> result;
@@ -634,6 +683,34 @@ void server_models::unload_all() {
             th.join();
         }
     }
+}
+
+std::string server_models::register_model(common_preset preset, std::string name, int stop_timeout) {
+    // base preset (server CLI args) takes highest precedence
+    preset.merge(base_preset);
+
+    server_model_meta meta{
+        /* preset       */ std::move(preset),
+        /* name         */ name,
+        /* port         */ 0,
+        /* status       */ SERVER_MODEL_STATUS_UNLOADED,
+        /* last_used    */ 0,
+        /* args         */ std::vector<std::string>(),
+        /* exit_code    */ 0,
+        /* stop_timeout */ stop_timeout > 0 ? stop_timeout : DEFAULT_STOP_TIMEOUT,
+    };
+
+    std::lock_guard<std::mutex> lk(mutex);
+    std::string base = meta.name.empty() ? "model" : meta.name;
+    std::string final = base;
+    int suffix = 2;
+    while (mapping.find(final) != mapping.end()) {
+        final = string_format("%s-%d", base.c_str(), suffix++);
+    }
+    meta.name = final;
+    add_model(std::move(meta));
+    cv.notify_all();
+    return final;
 }
 
 void server_models::update_status(const std::string & name, server_model_status status, int exit_code) {
@@ -908,6 +985,92 @@ void server_models_routes::init_routes() {
         }
         models.unload(name);
         res_ok(res, {{"success", true}});
+        return res;
+    };
+
+    this->post_router_models_bootstrap = [this](const server_http_req & req) {
+        auto res = std::make_unique<server_http_res>();
+        json body = json::parse(req.body);
+
+        std::string args_raw   = json_value(body, "args", std::string());
+        std::string model_path = json_value(body, "model_path", std::string());
+        std::string mmproj_path = json_value(body, "mmproj_path", std::string());
+        std::string name       = json_value(body, "name", std::string());
+        int stop_timeout       = json_value(body, "stop_timeout", 0);
+
+        common_preset_context ctx_preset(LLAMA_EXAMPLE_SERVER);
+        common_preset preset;
+        try {
+            std::vector<std::string> argv = {"llama-server"};
+            if (!args_raw.empty()) {
+                auto tokens = split_cli_args(args_raw);
+                argv.insert(argv.end(), tokens.begin(), tokens.end());
+            }
+            std::vector<char *> argv_ptrs = to_char_ptr_array(argv);
+            preset = ctx_preset.load_from_args(static_cast<int>(argv.size()), argv_ptrs.data());
+        } catch (const std::exception & e) {
+            res_err(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        // remove reserved args
+        unset_reserved_args(preset, false);
+
+        // override model path if provided
+        if (!model_path.empty()) {
+            preset.unset_option("LLAMA_ARG_MODEL");
+            preset.unset_option("LLAMA_ARG_MMPROJ");
+            preset.unset_option("LLAMA_ARG_HF_REPO");
+            preset.set_option(ctx_preset, "LLAMA_ARG_MODEL", model_path);
+            if (!mmproj_path.empty()) {
+                preset.set_option(ctx_preset, "LLAMA_ARG_MMPROJ", mmproj_path);
+            }
+        }
+
+        // validate model source
+        std::string tmp;
+        bool has_model_arg = preset.get_option("LLAMA_ARG_MODEL", tmp) || preset.get_option("LLAMA_ARG_HF_REPO", tmp);
+        if (model_path.empty() && !has_model_arg) {
+            res_err(res, format_error_response("model_path is required", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        // auto-derive name if missing
+        if (name.empty()) {
+            std::string val;
+            if (!model_path.empty()) {
+                try {
+                    name = std::filesystem::path(model_path).stem().string();
+                } catch (...) {
+                    name = "model";
+                }
+            } else if (preset.get_option("LLAMA_ARG_HF_REPO", val)) {
+                name = val;
+                auto pos = name.find_last_of("/\\");
+                if (pos != std::string::npos) {
+                    name = name.substr(pos + 1);
+                }
+            } else if (preset.get_option("LLAMA_ARG_MODEL", val)) {
+                try {
+                    name = std::filesystem::path(val).stem().string();
+                } catch (...) {
+                    name = val;
+                }
+            } else {
+                name = "model";
+            }
+        }
+
+        std::string final_name;
+        try {
+            final_name = models.register_model(std::move(preset), name, stop_timeout);
+            models.load(final_name);
+        } catch (const std::exception & e) {
+            res_err(res, format_error_response(e.what(), ERROR_TYPE_SERVER));
+            return res;
+        }
+
+        res_ok(res, {{"success", true}, {"model", final_name}});
         return res;
     };
 }

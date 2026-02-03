@@ -388,6 +388,26 @@ export interface ApiRouterModelsLoadResponse {
 }
 
 /**
+ * Request to bootstrap a model (ad-hoc model + args)
+ */
+export interface ApiRouterModelsBootstrapRequest {
+	args?: string;
+	model_path?: string;
+	mmproj_path?: string;
+	name?: string;
+	stop_timeout?: number;
+}
+
+/**
+ * Response from bootstrapping a model
+ */
+export interface ApiRouterModelsBootstrapResponse {
+	success: boolean;
+	model?: string;
+	error?: string;
+}
+
+/**
  * Request to check model status
  */
 export interface ApiRouterModelsStatusRequest {

@@ -85,6 +85,28 @@ export class ModelsService {
 	}
 
 	/**
+	 * Bootstrap a model (ROUTER mode)
+	 * POST /models/bootstrap
+	 * @param payload - Bootstrap request payload
+	 */
+	static async bootstrap(
+		payload: ApiRouterModelsBootstrapRequest
+	): Promise<ApiRouterModelsBootstrapResponse> {
+		const response = await fetch(`${base}/models/bootstrap`, {
+			method: 'POST',
+			headers: getJsonHeaders(),
+			body: JSON.stringify(payload)
+		});
+
+		if (!response.ok) {
+			const errorData = await response.json().catch(() => ({}));
+			throw new Error(errorData.error || `Failed to bootstrap model (status ${response.status})`);
+		}
+
+		return response.json() as Promise<ApiRouterModelsBootstrapResponse>;
+	}
+
+	/**
 	 * Unload a model (ROUTER mode)
 	 * POST /models/unload
 	 * @param modelId - Model identifier to unload

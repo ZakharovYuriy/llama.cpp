@@ -124,6 +124,10 @@ public:
     void unload(const std::string & name);
     void unload_all();
 
+    // register an ad-hoc model preset at runtime (thread-safe)
+    // returns the final model name (may be adjusted to avoid collisions)
+    std::string register_model(common_preset preset, std::string name, int stop_timeout);
+
     // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status, int exit_code);
 
@@ -168,6 +172,7 @@ struct server_models_routes {
     server_http_context::handler_t get_router_models;
     server_http_context::handler_t post_router_models_load;
     server_http_context::handler_t post_router_models_unload;
+    server_http_context::handler_t post_router_models_bootstrap;
 };
 
 /**

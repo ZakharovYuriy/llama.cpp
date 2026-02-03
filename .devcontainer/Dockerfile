@@ -15,6 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN git lfs install
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg apt-transport-https \
+ && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN python3 -m pip install --no-cache-dir -U pip setuptools wheel \
  && python3 -m pip install --no-cache-dir numpy tqdm sentencepiece safetensors huggingface_hub
 

@@ -1,11 +1,18 @@
 <script lang="ts">
-	import { ChatScreen, DialogModelNotAvailable } from '$lib/components/app';
+	import {
+		ChatScreen,
+		DialogModelNotAvailable,
+		ServerBootstrap,
+		ServerErrorSplash,
+		ServerLoadingSplash
+	} from '$lib/components/app';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
-	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
+	import { modelsStore, modelOptions, modelsLoading } from '$lib/stores/models.svelte';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
+	import { isRouterMode, serverError, serverLoading } from '$lib/stores/server.svelte';
 
 	let qParam = $derived(page.url.searchParams.get('q'));
 	let modelParam = $derived(page.url.searchParams.get('model'));
@@ -15,6 +22,11 @@
 	let showModelNotAvailable = $state(false);
 	let requestedModelName = $state('');
 	let availableModelNames = $derived(modelOptions().map((m) => m.model));
+	let isServerLoading = $derived(serverLoading());
+	let serverErrorMessage = $derived(serverError());
+	let isRouter = $derived(isRouterMode());
+	let isModelsLoading = $derived(modelsLoading());
+	let showBootstrap = $derived(isRouter && !isModelsLoading && modelOptions().length === 0);
 
 	/**
 	 * Clear URL params after message is sent to prevent re-sending on refresh
@@ -71,6 +83,10 @@
 		conversationsStore.clearActiveConversation();
 		chatStore.clearUIState();
 
+		await modelsStore.fetch().catch((error) => {
+			console.warn('Unable to load models:', error);
+		});
+
 		// Handle URL params only if we have ?q= or ?model= or ?new_chat=true
 		if (qParam !== null || modelParam !== null || newChatParam === 'true') {
 			await handleUrlParams();
@@ -82,7 +98,15 @@
 	<title>llama.cpp - AI Chat Interface</title>
 </svelte:head>
 
-<ChatScreen showCenteredEmpty={true} />
+{#if isServerLoading}
+	<ServerLoadingSplash />
+{:else if serverErrorMessage}
+	<ServerErrorSplash error={serverErrorMessage} />
+{:else if showBootstrap}
+	<ServerBootstrap />
+{:else}
+	<ChatScreen showCenteredEmpty={true} />
+{/if}
 
 <DialogModelNotAvailable
 	bind:open={showModelNotAvailable}
