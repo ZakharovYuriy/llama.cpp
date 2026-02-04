@@ -9,11 +9,13 @@ class UIAssets:
         self.static_dir = static_dir
         self.index_gz = (static_dir / "index.html.gz").read_bytes()
         self.loading_html = (static_dir / "loading.html").read_bytes()
+        self.setup_html = (static_dir / "setup.html").read_bytes()
 
     def index_response(self) -> web.Response:
         return web.Response(
             body=self.index_gz,
-            content_type="text/html; charset=utf-8",
+            content_type="text/html",
+            charset="utf-8",
             headers={
                 "Content-Encoding": "gzip",
                 "Cross-Origin-Embedder-Policy": "require-corp",
@@ -25,7 +27,15 @@ class UIAssets:
         return web.Response(
             body=self.loading_html,
             status=status,
-            content_type="text/html; charset=utf-8",
+            content_type="text/html",
+            charset="utf-8",
+        )
+
+    def setup_response(self) -> web.Response:
+        return web.Response(
+            body=self.setup_html,
+            content_type="text/html",
+            charset="utf-8",
         )
 
 

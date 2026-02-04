@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from typing import Dict, Optional
 
@@ -42,14 +41,14 @@ def filter_headers(headers) -> Dict[str, str]:
 class HubProxy:
     def __init__(
         self,
-        backend_base: str,
+        backend_base: Optional[str],
         api_prefix: str,
         ui_assets: UIAssets,
         health_timeout: float = 0.5,
         ssl_verify: bool = True,
         redirect_root: bool = True,
     ) -> None:
-        self.backend_base = backend_base.rstrip("/")
+        self.backend_base = backend_base.rstrip("/") if backend_base else None
         self.api_prefix = normalize_prefix(api_prefix)
         self.ui_assets = ui_assets
         self.health_timeout = health_timeout
@@ -60,6 +59,11 @@ class HubProxy:
 
     def ui_prefix(self) -> str:
         return self.api_prefix
+
+    def set_backend(self, backend_base: str, api_prefix: str) -> None:
+        self.backend_base = backend_base.rstrip("/")
+        self.api_prefix = normalize_prefix(api_prefix)
+        self._backend_ready = False
 
     def _ui_paths(self) -> Dict[str, str]:
         base = self.ui_prefix()
@@ -74,6 +78,13 @@ class HubProxy:
             "/": "index",
             "/index.html": "index",
             "/loading.html": "loading",
+        }
+
+    def _setup_paths(self) -> Dict[str, str]:
+        return {
+            "/": "setup",
+            "/setup": "setup",
+            "/setup/": "setup",
         }
 
     def _is_proxy_path(self, path: str) -> bool:
@@ -91,6 +102,8 @@ class HubProxy:
         return headers
 
     async def _check_backend_ready(self) -> bool:
+        if not self.backend_base:
+            return False
         if self._backend_ready:
             return True
         health_path = f"{self.api_prefix}/health" if self.api_prefix else "/health"
@@ -118,6 +131,8 @@ class HubProxy:
         return self.ui_assets.index_response()
 
     async def _proxy(self, request: web.Request) -> web.StreamResponse:
+        if not self.backend_base:
+            return web.Response(status=503, text="Backend is not started")
         url = f"{self.backend_base}{request.path_qs}"
         req_headers = filter_headers(request.headers)
         req_headers.update(self._cors_headers(request))
@@ -158,9 +173,17 @@ class HubProxy:
             )
             return web.Response(status=204, headers=headers)
 
+        if not self.backend_base:
+            setup_paths = self._setup_paths()
+            if request.path in setup_paths:
+                return self.ui_assets.setup_response()
+
         ui_paths = self._ui_paths()
         if request.path in ui_paths:
             return await self._handle_ui(request, ui_paths[request.path])
+
+        if self.backend_base and request.path in self._setup_paths():
+            raise web.HTTPFound(self.ui_prefix() + "/")
 
         if self.redirect_root and request.path == "/" and self.ui_prefix():
             raise web.HTTPFound(self.ui_prefix() + "/")

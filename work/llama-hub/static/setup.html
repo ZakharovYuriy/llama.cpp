@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Model startup</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0c0c0c;
+        --panel: #171717;
+        --panel-2: #1f1f1f;
+        --border: #2a2a2a;
+        --text: #f2f2f2;
+        --muted: #a0a0a0;
+        --accent: #f2f2f2;
+        --accent-muted: #cfcfcf;
+        --shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+        --radius: 14px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: radial-gradient(1000px 600px at 20% -20%, #202020 0%, transparent 60%),
+          radial-gradient(800px 400px at 80% 120%, #1a1a1a 0%, transparent 60%),
+          var(--bg);
+        color: var(--text);
+        font-family: "Inter", "Segoe UI", sans-serif;
+      }
+
+      #root {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 40px 16px;
+      }
+
+      .card {
+        width: min(900px, 100%);
+        background: linear-gradient(180deg, #1a1a1a 0%, #131313 100%);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 32px;
+        box-shadow: var(--shadow);
+      }
+
+      h1 {
+        font-size: 22px;
+        margin: 0 0 8px;
+      }
+
+      p.desc {
+        margin: 0 0 28px;
+        color: var(--muted);
+      }
+
+      label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+
+      .field {
+        margin-bottom: 22px;
+      }
+
+      .input,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--border);
+        background: var(--panel-2);
+        color: var(--text);
+        border-radius: 10px;
+        padding: 12px 14px;
+        font-size: 14px;
+        outline: none;
+      }
+
+      textarea {
+        min-height: 84px;
+        resize: vertical;
+      }
+
+      .help {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 6px;
+      }
+
+      .row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .row .input {
+        flex: 1;
+      }
+
+      .btn {
+        border: 1px solid var(--border);
+        background: #252525;
+        color: var(--text);
+        border-radius: 10px;
+        padding: 10px 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: border-color 0.15s ease, transform 0.15s ease;
+      }
+
+      .btn:hover {
+        border-color: #3a3a3a;
+        transform: translateY(-1px);
+      }
+
+      .btn-primary {
+        background: var(--text);
+        color: #0b0b0b;
+        border-color: transparent;
+      }
+
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 12px;
+      }
+
+      .status {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      @media (max-width: 720px) {
+        .row {
+          flex-direction: column;
+          align-items: stretch;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel">
+      const { useState, useRef } = React;
+
+      function App() {
+        const [launchArgs, setLaunchArgs] = useState("-c 4096 --jinja");
+        const [modelPath, setModelPath] = useState("/models/gpt-oss-20b/gpt-oss-20b-mxfp4.gguf");
+        const [modelName, setModelName] = useState("OpenAI");
+        const [status, setStatus] = useState("");
+        const [submitting, setSubmitting] = useState(false);
+        const fileInputRef = useRef(null);
+
+        const onChooseFile = () => {
+          if (fileInputRef.current) {
+            fileInputRef.current.click();
+          }
+        };
+
+        const onFileChange = (event) => {
+          const file = event.target.files && event.target.files[0];
+          if (!file) return;
+          setModelPath(file.name);
+        };
+
+        const startServer = async () => {
+          setSubmitting(true);
+          setStatus("Starting llama-server...");
+          try {
+            const res = await fetch("/setup/start", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                launchArgs,
+                modelPath,
+                modelName,
+              }),
+            });
+
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              throw new Error(data.error || "Failed to start");
+            }
+
+            const url = data.ui_url || "/";
+            window.location.href = url;
+          } catch (err) {
+            setStatus(err.message);
+          } finally {
+            setSubmitting(false);
+          }
+        };
+
+        return (
+          <div className="card">
+            <h1>Model startup</h1>
+            <p className="desc">Enter CLI-style launch arguments and the path to your model file.</p>
+
+            <div className="field">
+              <label>Launch arguments</label>
+              <textarea
+                value={launchArgs}
+                onChange={(e) => setLaunchArgs(e.target.value)}
+                placeholder="-c 4096 --jinja
+--port 8080 --host 127.0.0.1 --api-prefix /api
+--n-gpu-layers 33 --threads 8 --batch-size 2048
+--top-p 0.9 --temp 0.7 --repeat-penalty 1.1
+--mirostat 2 --mirostat-lr 0.1 --mirostat-ent 5"
+              />
+              <div className="help">
+                Use llama-server CLI flags. Examples above. The model path and alias are taken from the fields below
+                unless you include <code>--model</code> or <code>--alias</code> here. For full help, run
+                <code>llama-server --help</code>.
+              </div>
+            </div>
+
+            <div className="field">
+              <label>Model path</label>
+              <div className="row">
+                <input
+                  className="input"
+                  value={modelPath}
+                  onChange={(e) => setModelPath(e.target.value)}
+                  placeholder="/path/to/model.gguf"
+                />
+                <button className="btn" onClick={onChooseFile} type="button">
+                  Choose file
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".gguf,.bin,.safetensors"
+                  style={{ display: "none" }}
+                  onChange={onFileChange}
+                />
+              </div>
+              <div className="help">
+                If the browser does not provide the full path, paste it manually.
+              </div>
+            </div>
+
+            <div className="field">
+              <label>Model name (optional)</label>
+              <input
+                className="input"
+                value={modelName}
+                onChange={(e) => setModelName(e.target.value)}
+                placeholder="my-model"
+              />
+            </div>
+
+            <div className="footer">
+              <div className="status">{status || "After startup, the standard chat UI will open."}</div>
+              <button className="btn btn-primary" onClick={startServer} disabled={submitting}>
+                {submitting ? "Starting..." : "Start"}
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>

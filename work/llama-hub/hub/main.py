@@ -1,7 +1,10 @@
 import argparse
 import asyncio
 import logging
+import shlex
+import shutil
 import signal
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -20,6 +23,14 @@ def extract_flag(args: List[str], flag: str) -> Optional[str]:
         elif arg.startswith(flag + "="):
             value = arg.split("=", 1)[1]
     return value
+
+
+def has_flag(args: List[str], flags: List[str]) -> bool:
+    for arg in args:
+        for flag in flags:
+            if arg == flag or arg.startswith(flag + "="):
+                return True
+    return False
 
 
 def normalize_prefix(prefix: Optional[str]) -> str:
@@ -59,7 +70,7 @@ def infer_backend(args: List[str]) -> Tuple[str, int, str, Optional[bool]]:
 
 def parse_args() -> Tuple[argparse.Namespace, List[str]]:
     parser = argparse.ArgumentParser(description="llama-hub: UI + proxy wrapper for llama-server")
-    parser.add_argument("--server-bin", required=True, help="Path to llama-server binary")
+    parser.add_argument("--server-bin", default=None, help="Path to llama-server binary")
     parser.add_argument("--ui-host", default="127.0.0.1", help="Host for UI server")
     parser.add_argument("--ui-port", type=int, default=8081, help="Port for UI server")
     parser.add_argument("--static-dir", default=None, help="Path to UI static files (index.html.gz)")
@@ -101,39 +112,126 @@ def parse_args() -> Tuple[argparse.Namespace, List[str]]:
     return args, server_args
 
 
+def resolve_server_bin(cli_value: Optional[str]) -> Optional[Path]:
+    if cli_value:
+        return Path(cli_value).resolve()
+
+    default_path = Path("/workspace/build/bin/llama-server")
+    if default_path.exists():
+        return default_path
+
+    found = shutil.which("llama-server")
+    if found:
+        return Path(found).resolve()
+
+    return None
+
+
+def build_server_args(launch_args: str, model_path: str, model_name: str) -> List[str]:
+    args = shlex.split(launch_args or "")
+
+    if model_path and not has_flag(args, ["--model", "-m"]):
+        args += ["--model", model_path]
+
+    if model_name and not has_flag(args, ["--alias", "-a"]):
+        args += ["--alias", model_name]
+
+    return args
+
+
+def build_ui_url(ui_host: str, ui_port: int, api_prefix: str) -> str:
+    prefix = normalize_prefix(api_prefix)
+    return f"http://{ui_host}:{ui_port}{prefix}/"
+
+
+@dataclass
+class RuntimeState:
+    server_bin: Optional[Path]
+    proc: Optional[ProcessManager] = None
+    backend_base: Optional[str] = None
+    api_prefix: str = ""
+
+    def is_running(self) -> bool:
+        return self.proc is not None and self.proc.is_running()
+
+
 async def run() -> None:
     args, server_args = parse_args()
 
-    server_bin = Path(args.server_bin).resolve()
-    if not server_bin.exists():
-        raise SystemExit(f"llama-server binary not found: {server_bin}")
-
-    backend_host, backend_port, api_prefix, ssl_detected = infer_backend(server_args)
-
-    scheme = args.backend_scheme
-    if scheme is None:
-        scheme = "https" if ssl_detected else "http"
-
-    backend_base = f"{scheme}://{backend_host}:{backend_port}"
+    server_bin = resolve_server_bin(args.server_bin)
+    if args.server_bin and (not server_bin or not server_bin.exists()):
+        raise SystemExit(f"llama-server binary not found: {args.server_bin}")
 
     ui_assets = UIAssets(resolve_static_dir(args.static_dir))
     proxy = HubProxy(
-        backend_base=backend_base,
-        api_prefix=api_prefix,
+        backend_base=None,
+        api_prefix="",
         ui_assets=ui_assets,
         health_timeout=args.health_timeout,
         ssl_verify=args.backend_ssl_verify,
         redirect_root=not args.no_redirect_root,
     )
 
-    proc = ProcessManager([str(server_bin)] + server_args)
-    proc.start()
+    state = RuntimeState(server_bin=server_bin)
+
+    def start_backend(server_args_local: List[str]) -> str:
+        nonlocal state
+
+        if state.is_running():
+            raise RuntimeError("llama-server is already running")
+        if not state.server_bin or not state.server_bin.exists():
+            raise RuntimeError("llama-server binary not found")
+
+        backend_host, backend_port, api_prefix, ssl_detected = infer_backend(server_args_local)
+
+        scheme = args.backend_scheme
+        if scheme is None:
+            scheme = "https" if ssl_detected else "http"
+
+        backend_base = f"{scheme}://{backend_host}:{backend_port}"
+        proxy.set_backend(backend_base, api_prefix)
+
+        proc = ProcessManager([str(state.server_bin)] + server_args_local)
+        proc.start()
+        state.proc = proc
+        state.backend_base = backend_base
+        state.api_prefix = api_prefix
+
+        return build_ui_url(args.ui_host, args.ui_port, api_prefix)
+
+    async def setup_start(request: web.Request) -> web.Response:
+        if state.is_running():
+            return web.json_response({"success": False, "error": "Server already running"}, status=409)
+
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+
+        launch_args = str(payload.get("launchArgs", ""))
+        model_path = str(payload.get("modelPath", ""))
+        model_name = str(payload.get("modelName", ""))
+
+        if not model_path:
+            return web.json_response({"success": False, "error": "Model path is required"}, status=400)
+
+        server_args_local = build_server_args(launch_args, model_path, model_name)
+
+        try:
+            ui_url = start_backend(server_args_local)
+        except Exception as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=400)
+
+        return web.json_response({"success": True, "ui_url": ui_url})
 
     app = web.Application()
+    app.router.add_post("/setup/start", setup_start)
     app.router.add_route("*", "/{tail:.*}", proxy.handler)
 
     async def on_cleanup(app: web.Application) -> None:
         await proxy.close()
+        if state.proc:
+            state.proc.terminate()
 
     app.on_cleanup.append(on_cleanup)
 
@@ -142,9 +240,12 @@ async def run() -> None:
     site = web.TCPSite(runner, args.ui_host, args.ui_port)
     await site.start()
 
-    ui_prefix = proxy.ui_prefix() or ""
-    base_url = f"http://{args.ui_host}:{args.ui_port}{ui_prefix}/"
-    logging.info("UI available at %s", base_url)
+    if server_args:
+        ui_url = start_backend(server_args)
+        logging.info("UI available at %s", ui_url)
+    else:
+        setup_url = f"http://{args.ui_host}:{args.ui_port}/"
+        logging.info("Setup UI available at %s", setup_url)
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -158,7 +259,6 @@ async def run() -> None:
         await stop_event.wait()
     finally:
         await runner.cleanup()
-        proc.terminate()
 
 
 def main() -> None:

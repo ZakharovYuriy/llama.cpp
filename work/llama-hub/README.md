@@ -31,6 +31,14 @@ Open:
 - `http://127.0.0.1:8081/` (default)
 - If you pass `--api-prefix /api` to `llama-server`, UI will be at `http://127.0.0.1:8081/api/`
 
+### No-args setup mode
+
+If you start without backend args, a setup page opens at `http://127.0.0.1:8081/` where you can:
+
+- enter launch arguments
+- choose or paste the model path
+- set a model name (alias)
+
 ## Notes / limitations
 
 - Backend UNIX sockets (`--host *.sock`) are not supported in this MVP.
