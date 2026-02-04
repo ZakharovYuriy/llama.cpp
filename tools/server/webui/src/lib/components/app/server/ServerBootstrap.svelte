@@ -11,6 +11,14 @@
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import type { ApiRouterModelsBootstrapRequest } from '$lib/types';
 
+	interface Props {
+		embedded?: boolean;
+		navigateOnSuccess?: boolean;
+		submitLabel?: string;
+	}
+
+	let { embedded = false, navigateOnSuccess = false, submitLabel = 'Start' }: Props = $props();
+
 	let args = $state('');
 	let modelPath = $state('');
 	let modelName = $state('');
@@ -20,6 +28,12 @@
 
 	const canSubmit = $derived(
 		!isSubmitting && (modelPath.trim().length > 0 || args.trim().length > 0)
+	);
+
+	const footerHint = $derived(
+		embedded
+			? 'Model will appear in the model picker after startup.'
+			: 'After startup, the standard chat UI will open.'
 	);
 
 	function handlePickFile() {
@@ -57,7 +71,10 @@
 				await modelsStore.selectModelById(result.model);
 			}
 
-			goto(`#/`);
+			if (navigateOnSuccess) {
+				// Used by full-screen bootstrap to return to chat.
+				goto(`#/`);
+			}
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Failed to start model';
 		} finally {
@@ -66,8 +83,12 @@
 	}
 </script>
 
-<div class="flex h-full w-full items-center justify-center px-6 py-10">
-	<Card.Root class="w-full max-w-3xl">
+<div
+	class={embedded
+		? 'w-full'
+		: 'flex h-full w-full items-center justify-center px-6 py-10'}
+>
+	<Card.Root class={embedded ? 'w-full' : 'w-full max-w-3xl'}>
 		<Card.Header class="space-y-2">
 			<Card.Title class="flex items-center gap-2 text-xl">
 				<Terminal class="h-5 w-5 text-muted-foreground" />
@@ -102,17 +123,17 @@
 						autocomplete="off"
 						bind:value={modelPath}
 					/>
-	<input
-		class="hidden"
-		type="file"
-		accept=".gguf"
-		bind:this={fileInput}
-		onchange={handleFileChange}
-	/>
-	<Button type="button" variant="outline" class="gap-2" onclick={handlePickFile}>
-		<FolderOpen class="h-4 w-4" />
-		Choose file
-	</Button>
+					<input
+						class="hidden"
+						type="file"
+						accept=".gguf"
+						bind:this={fileInput}
+						onchange={handleFileChange}
+					/>
+					<Button type="button" variant="outline" class="gap-2" onclick={handlePickFile}>
+						<FolderOpen class="h-4 w-4" />
+						Choose file
+					</Button>
 				</div>
 				<p class="text-xs text-muted-foreground">
 					If the browser does not provide the full path, paste it manually.
@@ -138,13 +159,13 @@
 		</Card.Content>
 
 		<Card.Footer class="flex items-center justify-between">
-			<p class="text-xs text-muted-foreground">After startup, the standard chat UI will open.</p>
-	<Button class="gap-2" disabled={!canSubmit} onclick={handleStart}>
+			<p class="text-xs text-muted-foreground">{footerHint}</p>
+			<Button class="gap-2" disabled={!canSubmit} onclick={handleStart}>
 				{#if isSubmitting}
 					<Loader2 class="h-4 w-4 animate-spin" />
 					Starting...
 				{:else}
-					Start
+					{submitLabel}
 				{/if}
 			</Button>
 		</Card.Footer>

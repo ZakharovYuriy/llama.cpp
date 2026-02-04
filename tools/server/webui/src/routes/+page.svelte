@@ -103,7 +103,7 @@
 {:else if serverErrorMessage}
 	<ServerErrorSplash error={serverErrorMessage} />
 {:else if showBootstrap}
-	<ServerBootstrap />
+	<ServerBootstrap navigateOnSuccess={true} />
 {:else}
 	<ChatScreen showCenteredEmpty={true} />
 {/if}

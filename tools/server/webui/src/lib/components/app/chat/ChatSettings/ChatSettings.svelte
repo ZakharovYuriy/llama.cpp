@@ -4,6 +4,7 @@
 		Funnel,
 		AlertTriangle,
 		Code,
+		Terminal,
 		Monitor,
 		Sun,
 		Moon,
@@ -14,10 +15,13 @@
 	import {
 		ChatSettingsFooter,
 		ChatSettingsImportExportTab,
-		ChatSettingsFields
+		ChatSettingsFields,
+		ServerBootstrap
 	} from '$lib/components/app';
+	import * as Alert from '$lib/components/ui/alert';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { isRouterMode, serverError, serverLoading } from '$lib/stores/server.svelte';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
 
@@ -264,6 +268,11 @@
 					type: 'textarea'
 				}
 			]
+		},
+		{
+			title: 'Model Restart',
+			icon: Terminal,
+			fields: []
 		}
 		// TODO: Experimental features section will be implemented after initial release
 		// This includes Python interpreter (Pyodide integration) and other experimental features
@@ -285,6 +294,10 @@
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
 	let localConfig: SettingsConfigType = $state({ ...config() });
+	let isRouter = $derived(isRouterMode());
+	let isServerLoading = $derived(serverLoading());
+	let serverErrorMessage = $derived(serverError());
+	let isBootstrapSection = $derived(currentSection.title === 'Model Restart');
 
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
@@ -486,6 +499,28 @@
 
 				{#if currentSection.title === 'Import/Export'}
 					<ChatSettingsImportExportTab />
+				{:else if isBootstrapSection}
+					<div class="space-y-3">
+						<p class="text-xs text-muted-foreground">
+							Bootstrap a new model instance with custom CLI arguments (ROUTER mode only).
+						</p>
+
+						{#if isServerLoading}
+							<p class="text-xs text-muted-foreground">Loading server status...</p>
+						{:else if serverErrorMessage}
+							<Alert.Root variant="destructive">
+								<Alert.Title>Server unavailable</Alert.Title>
+								<Alert.Description>{serverErrorMessage}</Alert.Description>
+							</Alert.Root>
+						{:else if isRouter}
+							<ServerBootstrap embedded={true} submitLabel="Restart with new model and params" />
+						{:else}
+							<p class="text-xs text-muted-foreground">
+								This server is running in MODEL mode. Switch to ROUTER mode to bootstrap
+								models.
+							</p>
+						{/if}
+					</div>
 				{:else}
 					<div class="space-y-6">
 						<ChatSettingsFields
