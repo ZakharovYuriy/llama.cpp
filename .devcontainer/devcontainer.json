@@ -1,0 +1,43 @@
+{
+  "name": "llama.cpp (llm-toolchain)",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "remoteUser": "root",
+  "containerEnv": {
+    "LLAMA_DIR": "/workspace",
+    "BUILD_DIR": "/workspace/build",
+    "CMAKE_BUILD_TYPE": "Release",
+    "GGML_CUDA": "ON"
+  },
+  "runArgs": [
+    "--gpus",
+    "all"
+  ],
+  "forwardPorts": [
+    8080
+  ],
+  "postCreateCommand": "git lfs install || true",
+  "mounts": [
+    "source=${localEnv:USERPROFILE}\\.codex,target=/root/.codex,type=bind,consistency=cached",
+    "source=${localWorkspaceFolder}/../models,target=/models,type=bind,consistency=cached"
+  ],
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "cmake.configureOnOpen": false,
+        "cmake.buildOnSave": false,
+        "cmake.configureOnEdit": false,
+        "cmake.autoSelectActiveFolder": false
+      },
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "twxs.cmake"
+      ]
+    }
+  }
+}
