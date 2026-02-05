@@ -9,12 +9,14 @@
 		Moon,
 		ChevronLeft,
 		ChevronRight,
-		Database
+		Database,
+		BookOpen
 	} from '@lucide/svelte';
 	import {
 		ChatSettingsFooter,
 		ChatSettingsImportExportTab,
-		ChatSettingsFields
+		ChatSettingsFields,
+		ChatSettingsRagTab
 	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -245,6 +247,11 @@
 			fields: []
 		},
 		{
+			title: 'RAG',
+			icon: BookOpen,
+			fields: []
+		},
+		{
 			title: 'Developer',
 			icon: Code,
 			fields: [
@@ -285,6 +292,7 @@
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
 	let localConfig: SettingsConfigType = $state({ ...config() });
+	let ragTabRef: ChatSettingsRagTab | undefined = $state();
 
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
@@ -300,13 +308,16 @@
 		localConfig[key] = value;
 	}
 
-	function handleReset() {
+	async function handleReset() {
 		localConfig = { ...config() };
 
 		setMode(localConfig.theme as 'light' | 'dark' | 'system');
+
+		ragTabRef?.resetToDefaults();
+		await ragTabRef?.save(false);
 	}
 
-	function handleSave() {
+	async function handleSave() {
 		if (localConfig.custom && typeof localConfig.custom === 'string' && localConfig.custom.trim()) {
 			try {
 				JSON.parse(localConfig.custom);
@@ -353,6 +364,7 @@
 			}
 		}
 
+		await ragTabRef?.save(false);
 		settingsStore.updateMultipleConfig(processedConfig);
 		onSave?.();
 	}
@@ -484,18 +496,24 @@
 					<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 				</div>
 
-				{#if currentSection.title === 'Import/Export'}
+				<div class={activeSection === 'Import/Export' ? '' : 'hidden'}>
 					<ChatSettingsImportExportTab />
-				{:else}
-					<div class="space-y-6">
-						<ChatSettingsFields
-							fields={currentSection.fields}
-							{localConfig}
-							onConfigChange={handleConfigChange}
-							onThemeChange={handleThemeChange}
-						/>
-					</div>
-				{/if}
+				</div>
+
+				<div class={activeSection === 'RAG' ? '' : 'hidden'}>
+					<ChatSettingsRagTab bind:this={ragTabRef} />
+				</div>
+
+				<div
+					class={activeSection === 'Import/Export' || activeSection === 'RAG' ? 'hidden' : 'space-y-6'}
+				>
+					<ChatSettingsFields
+						fields={currentSection.fields}
+						{localConfig}
+						onConfigChange={handleConfigChange}
+						onThemeChange={handleThemeChange}
+					/>
+				</div>
 			</div>
 
 			<div class="mt-8 border-t pt-6">

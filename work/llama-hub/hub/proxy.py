@@ -6,7 +6,7 @@ from typing import Dict, Optional
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, web
 
 from .ui import UIAssets
-from rag import RagEngine
+from rag import RagController
 
 HOP_HEADERS = {
     "connection",
@@ -47,7 +47,7 @@ class HubProxy:
         backend_base: Optional[str],
         api_prefix: str,
         ui_assets: UIAssets,
-        rag_engine: Optional[RagEngine] = None,
+        rag_controller: Optional[RagController] = None,
         health_timeout: float = 0.5,
         ssl_verify: bool = True,
         redirect_root: bool = True,
@@ -55,7 +55,7 @@ class HubProxy:
         self.backend_base = backend_base.rstrip("/") if backend_base else None
         self.api_prefix = normalize_prefix(api_prefix)
         self.ui_assets = ui_assets
-        self.rag_engine = rag_engine
+        self.rag_controller = rag_controller
         self.health_timeout = health_timeout
         self.redirect_root = redirect_root
         self._backend_ready = False
@@ -237,7 +237,7 @@ class HubProxy:
         return False
 
     async def _maybe_rag_inject(self, request: web.Request, data: bytes) -> bytes:
-        if not self.rag_engine or not self.rag_engine.enabled:
+        if not self.rag_controller or not self.rag_controller.can_inject():
             return data
         if request.method != "POST":
             return data
@@ -261,7 +261,7 @@ class HubProxy:
             return data
 
         try:
-            results = await asyncio.to_thread(self.rag_engine.retrieve, query)
+            results = await asyncio.to_thread(self.rag_controller.retrieve, query)
         except Exception:
             logging.exception("RAG retrieval failed")
             return data

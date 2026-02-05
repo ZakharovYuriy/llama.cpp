@@ -4,6 +4,7 @@ import logging
 import shlex
 import shutil
 import signal
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -13,7 +14,7 @@ from aiohttp import web
 from .process import ProcessManager
 from .proxy import HubProxy
 from .ui import UIAssets, resolve_static_dir
-from rag import RagConfig, RagEngine
+from rag import RagController, RagState, load_state, save_state, state_path
 
 
 def extract_flag(args: List[str], flag: str) -> Optional[str]:
@@ -162,60 +163,23 @@ def build_ui_url(ui_host: str, ui_port: int, api_prefix: str) -> str:
     return f"http://{ui_host}:{ui_port}{prefix}/"
 
 
-def build_rag_engine(args: argparse.Namespace) -> Optional[RagEngine]:
-    if not args.rag_enabled:
-        logging.info("RAG disabled")
-        return None
+def extract_cli_args(raw_args: List[str]) -> List[str]:
+    if "--" in raw_args:
+        return raw_args[: raw_args.index("--")]
+    return raw_args
 
-    missing = []
-    if not args.docs_dir:
-        missing.append("--docs-dir")
-    if not args.emb_model_path:
-        missing.append("--emb-model-path")
-    if not args.index_dir:
-        missing.append("--index-dir")
-    if missing:
-        raise SystemExit(f"RAG enabled but missing required args: {', '.join(missing)}")
 
-    config = RagConfig(
-        enabled=True,
-        docs_dir=Path(args.docs_dir),
-        emb_model_path=Path(args.emb_model_path),
-        index_dir=Path(args.index_dir),
-        top_k=args.rag_top_k,
-        chunk_size=args.chunk_size,
-        chunk_overlap=args.chunk_overlap,
-    )
-    config = config.resolved()
-
-    logging.info(
-        "RAG enabled: docs_dir=%s emb_model_path=%s index_dir=%s top_k=%s chunk_size=%s chunk_overlap=%s",
-        config.docs_dir,
-        config.emb_model_path,
-        config.index_dir,
-        config.top_k,
-        config.chunk_size,
-        config.chunk_overlap,
-    )
-
-    if not config.docs_dir.exists():
-        raise SystemExit(f"docs-dir not found: {config.docs_dir}")
-    if not config.emb_model_path.exists():
-        raise SystemExit(f"emb-model-path not found: {config.emb_model_path}")
-    if config.index_dir.exists() and not config.index_dir.is_dir():
-        raise SystemExit(f"index-dir is not a directory: {config.index_dir}")
-    if config.top_k < 1:
-        raise SystemExit("--rag-top-k must be >= 1")
-    if config.chunk_size < 1:
-        raise SystemExit("--chunk-size must be >= 1")
-    if config.chunk_overlap < 0:
-        raise SystemExit("--chunk-overlap must be >= 0")
-
-    rag_engine = RagEngine(config)
-    rag_engine.ensure_ready()
-    stats = rag_engine.stats()
-    logging.info("RAG ready: chunks=%s index_size=%s", stats["chunks"], stats["index_size"])
-    return rag_engine
+def detect_rag_cli_flags(raw_args: List[str]) -> bool:
+    rag_flags = [
+        "--rag-enabled",
+        "--docs-dir",
+        "--emb-model-path",
+        "--index-dir",
+        "--rag-top-k",
+        "--chunk-size",
+        "--chunk-overlap",
+    ]
+    return has_flag(raw_args, rag_flags)
 
 
 @dataclass
@@ -237,12 +201,31 @@ async def run() -> None:
         raise SystemExit(f"llama-server binary not found: {args.server_bin}")
 
     ui_assets = UIAssets(resolve_static_dir(args.static_dir))
-    rag_engine = build_rag_engine(args)
+
+    raw_cli_args = extract_cli_args(sys.argv[1:])
+    rag_cli_explicit = detect_rag_cli_flags(raw_cli_args)
+    rag_state_file = state_path()
+
+    if rag_cli_explicit:
+        rag_state = RagState(
+            enabled=bool(args.rag_enabled),
+            docs_dir=str(args.docs_dir or ""),
+            emb_model_path=str(args.emb_model_path or ""),
+            index_dir=str(args.index_dir or ""),
+            top_k=int(args.rag_top_k),
+            chunk_size=int(args.chunk_size),
+            chunk_overlap=int(args.chunk_overlap),
+        )
+        save_state(rag_state, rag_state_file)
+    else:
+        rag_state = load_state(rag_state_file)
+
+    rag_controller = RagController(rag_state, rag_state_file)
     proxy = HubProxy(
         backend_base=None,
         api_prefix="",
         ui_assets=ui_assets,
-        rag_engine=rag_engine,
+        rag_controller=rag_controller,
         health_timeout=args.health_timeout,
         ssl_verify=args.backend_ssl_verify,
         redirect_root=not args.no_redirect_root,
@@ -300,8 +283,76 @@ async def run() -> None:
 
         return web.json_response({"success": True, "ui_url": ui_url})
 
+    async def rag_state_get(request: web.Request) -> web.Response:
+        return web.json_response(rag_controller.snapshot())
+
+    async def rag_state_update(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        enabled = payload.get("enabled")
+        config = payload.get("config") if isinstance(payload.get("config"), dict) else None
+        try:
+            state = rag_controller.update_state(enabled, config)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(state)
+
+    async def rag_files_list(request: web.Request) -> web.Response:
+        return web.json_response({"files": rag_controller.list_files()})
+
+    async def rag_files_upload(request: web.Request) -> web.Response:
+        items = []
+        try:
+            reader = await request.multipart()
+            while True:
+                part = await reader.next()
+                if not part:
+                    break
+                if part.name not in {"file", "files"}:
+                    continue
+                filename = part.filename or ""
+                data = await part.read(decode=False)
+                items.append((filename, data))
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        try:
+            state = rag_controller.upload_files(items)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(state)
+
+    async def rag_files_delete(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        ids = payload.get("ids") or payload.get("files") or []
+        if not isinstance(ids, list):
+            ids = []
+        state = rag_controller.delete_files(ids)
+        return web.json_response(state)
+
+    async def rag_files_clear(request: web.Request) -> web.Response:
+        state = rag_controller.clear_files()
+        return web.json_response(state)
+
+    async def rag_build(request: web.Request) -> web.Response:
+        started, state = rag_controller.start_build()
+        if not started:
+            return web.json_response(state, status=409)
+        return web.json_response(state)
+
     app = web.Application()
     app.router.add_post("/setup/start", setup_start)
+    app.router.add_get("/rag/state", rag_state_get)
+    app.router.add_post("/rag/state", rag_state_update)
+    app.router.add_get("/rag/files", rag_files_list)
+    app.router.add_post("/rag/files", rag_files_upload)
+    app.router.add_post("/rag/files/delete", rag_files_delete)
+    app.router.add_post("/rag/files/clear", rag_files_clear)
+    app.router.add_post("/rag/build", rag_build)
     app.router.add_route("*", "/{tail:.*}", proxy.handler)
 
     async def on_cleanup(app: web.Application) -> None:

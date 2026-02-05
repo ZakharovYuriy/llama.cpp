@@ -19,6 +19,11 @@ Minimal Python wrapper that:
 ## Quick start
 
 ```bash
+cd /workspace/tools/server/webui && npm run build
+
+cd /workspace/work/llama-hub
+python scripts/copy_ui.py
+
 python3 -m venv /runtime-data/llama-hub-venv
 . /runtime-data/llama-hub-venv/bin/activate
 pip install -r requirements.txt
@@ -66,11 +71,14 @@ If you start without backend args, a setup page opens at `http://127.0.0.1:8081/
 
 - Backend UNIX sockets (`--host *.sock`) are not supported in this MVP.
 - If `llama-server` uses TLS, set `--backend-scheme https` and optionally `--backend-ssl-no-verify`.
-- This MVP only serves the bundled `index.html.gz` from `static/` (no build step).
+- This MVP only serves the bundled `index.html.gz` from `static/`. Run `python scripts/copy_ui.py` after building the web UI.
 
 ## Updating UI
 
-Copy the latest built UI bundle from llama.cpp:
+After building the web UI, copy the bundled assets:
 
-- `tools/server/public/index.html.gz` → `static/index.html.gz`
-- `tools/server/public/loading.html` → `static/loading.html`
+```bash
+cd /workspace/tools/server/webui && npm run build
+cd /workspace/work/llama-hub
+python scripts/copy_ui.py
+```

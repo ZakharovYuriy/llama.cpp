@@ -8,3 +8,5 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+static/index.html.gz
+static/loading.html

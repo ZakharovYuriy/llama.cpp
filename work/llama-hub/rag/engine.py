@@ -61,15 +61,40 @@ class RagEngine:
             return
         if self._ready:
             return
+        self.load_index_if_available()
+
+    def load_index_if_available(self) -> bool:
+        if not self.config.enabled:
+            return False
         with self._init_lock:
             if self._ready:
-                return
+                return True
             if self._model is None:
                 from sentence_transformers import SentenceTransformer
 
                 self._model = SentenceTransformer(str(self.config.emb_model_path))
-            if self._index is None or not self._meta:
-                self._index, self._meta = load_or_build_index(self._model, self.config)
+            if index_is_ready(self.config):
+                index_path, meta_path, _manifest_path = index_paths(self.config)
+                self._index, self._meta = load_index(index_path, meta_path)
+                self._ready = True
+                return True
+            self._index = None
+            self._meta = []
+            self._ready = False
+            return False
+
+    def build_index_now(self) -> None:
+        with self._init_lock:
+            if self._model is None:
+                from sentence_transformers import SentenceTransformer
+
+                self._model = SentenceTransformer(str(self.config.emb_model_path))
+            index, meta = build_index(self._model, self.config)
+            index_path, meta_path, manifest_path = index_paths(self.config)
+            save_index(index, meta, index_path, meta_path)
+            save_manifest(manifest_path, self.config, len(meta))
+            self._index = index
+            self._meta = meta
             self._ready = True
 
     def retrieve(self, query: str, top_k: Optional[int] = None) -> List[Dict]:
@@ -78,8 +103,11 @@ class RagEngine:
         if not query or not query.strip():
             return []
         self.ensure_ready()
-        if self._index is None or self._index.ntotal == 0:
-            return []
+        with self._init_lock:
+            if self._index is None or self._index.ntotal == 0:
+                return []
+            index = self._index
+            meta = list(self._meta)
 
         prompt = f"query: {query.strip()}"
         start = time.perf_counter()
@@ -87,13 +115,13 @@ class RagEngine:
             q_emb = self._model.encode([prompt], normalize_embeddings=True)
         q_emb = np.asarray(q_emb, dtype="float32")
         k = top_k or self.config.top_k
-        scores, ids = self._index.search(q_emb, k)
+        scores, ids = index.search(q_emb, k)
 
         out: List[Dict] = []
         for score, idx in zip(scores[0], ids[0]):
-            if idx < 0 or idx >= len(self._meta):
+            if idx < 0 or idx >= len(meta):
                 continue
-            item = dict(self._meta[idx])
+            item = dict(meta[idx])
             item["score"] = float(score)
             out.append(item)
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -185,6 +213,23 @@ def _manifest_matches(manifest: Optional[Dict], config: RagConfig) -> bool:
         and manifest.get("chunk_size") == config.chunk_size
         and manifest.get("chunk_overlap") == config.chunk_overlap
     )
+
+
+def index_paths(config: RagConfig) -> Tuple[Path, Path, Path]:
+    index_dir = config.index_dir
+    return index_dir / INDEX_NAME, index_dir / META_NAME, index_dir / MANIFEST_NAME
+
+
+def load_manifest(path: Path) -> Optional[Dict]:
+    return _load_manifest(path)
+
+
+def index_is_ready(config: RagConfig) -> bool:
+    index_path, meta_path, manifest_path = index_paths(config)
+    if not index_path.exists() or not meta_path.exists():
+        return False
+    manifest = _load_manifest(manifest_path)
+    return _manifest_matches(manifest, config)
 
 
 def build_index(model, config: RagConfig):

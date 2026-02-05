@@ -15,10 +15,14 @@
   },
   "runArgs": [
     "--gpus",
-    "all"
+    "all",
+    "-p",
+    "8081:8081",
+    "-p",
+    "8080:8080"
   ],
   "forwardPorts": [
-    8080
+    8080,8081
   ],
   "postCreateCommand": "git lfs install || true",
   "mounts": [
