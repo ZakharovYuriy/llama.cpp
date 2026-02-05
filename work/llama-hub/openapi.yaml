@@ -1,0 +1,123 @@
+openapi: 3.0.3
+info:
+  title: llama-hub API
+  version: "0.1.0"
+paths:
+  /model/config:
+    get:
+      summary: Get model configuration
+      responses:
+        "200":
+          description: Current model configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelConfig"
+    post:
+      summary: Apply model configuration and restart llama-server
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelConfig"
+      responses:
+        "202":
+          description: Restart initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelState"
+        "400":
+          description: Invalid configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Restart already in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /model/status:
+    get:
+      summary: Get model restart status
+      responses:
+        "200":
+          description: Current status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelStatus"
+components:
+  schemas:
+    ModelConfig:
+      type: object
+      properties:
+        modelName:
+          type: string
+        modelPath:
+          type: string
+        launchArgs:
+          type: string
+      required:
+        - modelPath
+    ModelStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - not_configured
+            - stopped
+            - restarting
+            - ready
+            - error
+        lastError:
+          type: string
+          nullable: true
+        updatedAt:
+          type: number
+          format: float
+          nullable: true
+        lastRestartAt:
+          type: number
+          format: float
+          nullable: true
+      required:
+        - status
+    ModelState:
+      type: object
+      properties:
+        config:
+          $ref: "#/components/schemas/ModelConfig"
+        status:
+          type: string
+          enum:
+            - not_configured
+            - stopped
+            - restarting
+            - ready
+            - error
+        lastError:
+          type: string
+          nullable: true
+        updatedAt:
+          type: number
+          format: float
+          nullable: true
+        lastRestartAt:
+          type: number
+          format: float
+          nullable: true
+      required:
+        - config
+        - status
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error

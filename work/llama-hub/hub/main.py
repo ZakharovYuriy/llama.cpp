@@ -5,16 +5,24 @@ import shlex
 import shutil
 import signal
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from aiohttp import web
 
+from .model_state import (
+    ModelConfig,
+    ModelState,
+    load_state as load_model_state,
+    save_state as save_model_state,
+    state_path as model_state_path,
+)
 from .process import ProcessManager
 from .proxy import HubProxy
 from .ui import UIAssets, resolve_static_dir
-from rag import RagController, RagState, load_state, save_state, state_path
+from rag import RagController, RagState, load_state as load_rag_state, save_state as save_rag_state, state_path as rag_state_path
 
 
 def extract_flag(args: List[str], flag: str) -> Optional[str]:
@@ -158,6 +166,69 @@ def build_server_args(launch_args: str, model_path: str, model_name: str) -> Lis
     return args
 
 
+MODEL_STATUS_NOT_CONFIGURED = "not_configured"
+MODEL_STATUS_STOPPED = "stopped"
+MODEL_STATUS_RESTARTING = "restarting"
+MODEL_STATUS_READY = "ready"
+MODEL_STATUS_ERROR = "error"
+
+
+def strip_model_flags(args: List[str]) -> List[str]:
+    flags = ("--model", "-m", "--alias", "-a")
+    cleaned: List[str] = []
+    skip_next = False
+    for idx, arg in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in flags:
+            if idx + 1 < len(args):
+                skip_next = True
+            continue
+        if any(arg.startswith(flag + "=") for flag in flags):
+            continue
+        cleaned.append(arg)
+    return cleaned
+
+
+def model_config_from_server_args(server_args: List[str]) -> ModelConfig:
+    model_path = extract_flag(server_args, "--model") or extract_flag(server_args, "-m") or ""
+    model_name = extract_flag(server_args, "--alias") or extract_flag(server_args, "-a") or ""
+    stripped = strip_model_flags(server_args)
+    launch_args = shlex.join(stripped)
+    return ModelConfig(model_name=model_name, model_path=model_path, launch_args=launch_args)
+
+
+def model_config_from_payload(payload: dict) -> ModelConfig:
+    model_name = str(payload.get("modelName") or "")
+    model_path = str(payload.get("modelPath") or "")
+    launch_args = str(payload.get("launchArgs") or "")
+    return ModelConfig(model_name=model_name, model_path=model_path, launch_args=launch_args)
+
+
+def model_config_payload(state: ModelState) -> dict:
+    return {
+        "modelName": state.config.model_name,
+        "modelPath": state.config.model_path,
+        "launchArgs": state.config.launch_args,
+    }
+
+
+def model_status_payload(state: ModelState) -> dict:
+    return {
+        "status": state.status,
+        "lastError": state.last_error,
+        "updatedAt": state.updated_at,
+        "lastRestartAt": state.last_restart_at,
+    }
+
+
+def model_state_payload(state: ModelState) -> dict:
+    payload = model_status_payload(state)
+    payload["config"] = model_config_payload(state)
+    return payload
+
+
 def build_ui_url(ui_host: str, ui_port: int, api_prefix: str) -> str:
     prefix = normalize_prefix(api_prefix)
     return f"http://{ui_host}:{ui_port}{prefix}/"
@@ -204,7 +275,7 @@ async def run() -> None:
 
     raw_cli_args = extract_cli_args(sys.argv[1:])
     rag_cli_explicit = detect_rag_cli_flags(raw_cli_args)
-    rag_state_file = state_path()
+    rag_state_file = rag_state_path()
 
     if rag_cli_explicit:
         rag_state = RagState(
@@ -216,9 +287,9 @@ async def run() -> None:
             chunk_size=int(args.chunk_size),
             chunk_overlap=int(args.chunk_overlap),
         )
-        save_state(rag_state, rag_state_file)
+        save_rag_state(rag_state, rag_state_file)
     else:
-        rag_state = load_state(rag_state_file)
+        rag_state = load_rag_state(rag_state_file)
 
     rag_controller = RagController(rag_state, rag_state_file)
     proxy = HubProxy(
@@ -232,6 +303,39 @@ async def run() -> None:
     )
 
     state = RuntimeState(server_bin=server_bin)
+    model_state_file = model_state_path()
+    model_state = load_model_state(model_state_file)
+    restart_lock = asyncio.Lock()
+
+    def model_is_configured(config: ModelConfig) -> bool:
+        return bool(config.model_path)
+
+    def update_model_state(
+        *,
+        config: Optional[ModelConfig] = None,
+        status: Optional[str] = None,
+        error: Optional[str] = None,
+        clear_error: bool = False,
+        mark_restart: bool = False,
+    ) -> None:
+        if config is not None:
+            model_state.config = config
+        if status is not None:
+            model_state.status = status
+        if clear_error:
+            model_state.last_error = None
+        elif error is not None:
+            model_state.last_error = error
+        if mark_restart:
+            model_state.last_restart_at = time.time()
+        save_model_state(model_state, model_state_file)
+
+    if not server_args:
+        if model_is_configured(model_state.config):
+            model_state.status = MODEL_STATUS_STOPPED
+        else:
+            model_state.status = MODEL_STATUS_NOT_CONFIGURED
+        save_model_state(model_state, model_state_file)
 
     def start_backend(server_args_local: List[str]) -> str:
         nonlocal state
@@ -271,6 +375,8 @@ async def run() -> None:
         model_path = str(payload.get("modelPath", ""))
         model_name = str(payload.get("modelName", ""))
 
+        config = ModelConfig(model_name=model_name, model_path=model_path, launch_args=launch_args)
+
         if not model_path:
             return web.json_response({"success": False, "error": "Model path is required"}, status=400)
 
@@ -281,7 +387,60 @@ async def run() -> None:
         except Exception as exc:
             return web.json_response({"success": False, "error": str(exc)}, status=400)
 
+        update_model_state(
+            config=config,
+            status=MODEL_STATUS_READY,
+            clear_error=True,
+            mark_restart=True,
+        )
         return web.json_response({"success": True, "ui_url": ui_url})
+
+    async def model_config_get(request: web.Request) -> web.Response:
+        return web.json_response(model_config_payload(model_state))
+
+    async def model_status_get(request: web.Request) -> web.Response:
+        return web.json_response(model_status_payload(model_state))
+
+    async def model_config_update(request: web.Request) -> web.Response:
+        if restart_lock.locked():
+            return web.json_response({"error": "Model restart already in progress"}, status=409)
+        if model_state.status == MODEL_STATUS_RESTARTING:
+            return web.json_response({"error": "Model restart already in progress"}, status=409)
+
+        if not state.server_bin or not state.server_bin.exists():
+            return web.json_response({"error": "llama-server binary not found"}, status=400)
+
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+
+        config = model_config_from_payload(payload if isinstance(payload, dict) else {})
+        if not config.model_path:
+            return web.json_response({"error": "Model path is required"}, status=400)
+
+        update_model_state(
+            config=config,
+            status=MODEL_STATUS_RESTARTING,
+            clear_error=True,
+            mark_restart=True,
+        )
+
+        async def restart_worker() -> None:
+            async with restart_lock:
+                try:
+                    if state.proc:
+                        await asyncio.to_thread(state.proc.terminate)
+                    server_args_local = build_server_args(
+                        config.launch_args, config.model_path, config.model_name
+                    )
+                    start_backend(server_args_local)
+                    update_model_state(status=MODEL_STATUS_READY, clear_error=True)
+                except Exception as exc:
+                    update_model_state(status=MODEL_STATUS_ERROR, error=str(exc))
+
+        asyncio.create_task(restart_worker())
+        return web.json_response(model_state_payload(model_state), status=202)
 
     async def rag_state_get(request: web.Request) -> web.Response:
         return web.json_response(rag_controller.snapshot())
@@ -346,6 +505,9 @@ async def run() -> None:
 
     app = web.Application()
     app.router.add_post("/setup/start", setup_start)
+    app.router.add_get("/model/config", model_config_get)
+    app.router.add_post("/model/config", model_config_update)
+    app.router.add_get("/model/status", model_status_get)
     app.router.add_get("/rag/state", rag_state_get)
     app.router.add_post("/rag/state", rag_state_update)
     app.router.add_get("/rag/files", rag_files_list)
@@ -369,6 +531,12 @@ async def run() -> None:
 
     if server_args:
         ui_url = start_backend(server_args)
+        update_model_state(
+            config=model_config_from_server_args(server_args),
+            status=MODEL_STATUS_READY,
+            clear_error=True,
+            mark_restart=True,
+        )
         logging.info("UI available at %s", ui_url)
     else:
         setup_url = f"http://{args.ui_host}:{args.ui_port}/"

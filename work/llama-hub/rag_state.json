@@ -3,10 +3,10 @@
   "docs_dir": "/data/docsForLLM",
   "emb_model_path": "/data/multilingual-e5-small",
   "index_dir": "/data/index",
-  "top_k": 10,
+  "top_k": 5,
   "chunk_size": 1000,
   "chunk_overlap": 200,
   "last_status": "disabled",
   "last_error": null,
-  "updated_at": 1770292429.1451075
+  "updated_at": 1770334696.8421514
 }

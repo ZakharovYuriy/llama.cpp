@@ -31,6 +31,7 @@ export { default as ChatScreenProcessingInfo } from './chat/ChatScreen/ChatScree
 export { default as ChatSettings } from './chat/ChatSettings/ChatSettings.svelte';
 export { default as ChatSettingsFooter } from './chat/ChatSettings/ChatSettingsFooter.svelte';
 export { default as ChatSettingsFields } from './chat/ChatSettings/ChatSettingsFields.svelte';
+export { default as ChatSettingsChangeModelTab } from './chat/ChatSettings/ChatSettingsChangeModelTab.svelte';
 export { default as ChatSettingsImportExportTab } from './chat/ChatSettings/ChatSettingsImportExportTab.svelte';
 export { default as ChatSettingsParameterSourceIndicator } from './chat/ChatSettings/ChatSettingsParameterSourceIndicator.svelte';
 export { default as ChatSettingsRagTab } from './chat/ChatSettings/ChatSettingsRagTab.svelte';

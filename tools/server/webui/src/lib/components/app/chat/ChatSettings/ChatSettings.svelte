@@ -10,9 +10,11 @@
 		ChevronLeft,
 		ChevronRight,
 		Database,
-		BookOpen
+		BookOpen,
+		RefreshCw
 	} from '@lucide/svelte';
 	import {
+		ChatSettingsChangeModelTab,
 		ChatSettingsFooter,
 		ChatSettingsImportExportTab,
 		ChatSettingsFields,
@@ -249,6 +251,11 @@
 		{
 			title: 'RAG',
 			icon: BookOpen,
+			fields: []
+		},
+		{
+			title: 'Change Model',
+			icon: RefreshCw,
 			fields: []
 		},
 		{
@@ -504,8 +511,14 @@
 					<ChatSettingsRagTab bind:this={ragTabRef} />
 				</div>
 
+				<div class={activeSection === 'Change Model' ? '' : 'hidden'}>
+					<ChatSettingsChangeModelTab />
+				</div>
+
 				<div
-					class={activeSection === 'Import/Export' || activeSection === 'RAG' ? 'hidden' : 'space-y-6'}
+					class={activeSection === 'Import/Export' || activeSection === 'RAG' || activeSection === 'Change Model'
+						? 'hidden'
+						: 'space-y-6'}
 				>
 					<ChatSettingsFields
 						fields={currentSection.fields}
