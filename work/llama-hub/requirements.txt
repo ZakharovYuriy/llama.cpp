@@ -1,1 +1,4 @@
 aiohttp>=3.9,<4
+sentence-transformers>=2.7,<3
+faiss-cpu>=1.7.4,<2
+numpy>=1.24,<3

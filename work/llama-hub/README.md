@@ -5,6 +5,7 @@ Minimal Python wrapper that:
 - starts `llama-server` as a subprocess
 - serves the existing llama.cpp Web UI (single-file bundle)
 - proxies API requests to the external `llama-server`, including SSE streaming
+- injects local RAG context into OpenAI-compatible generation endpoints
 
 ## Structure
 
@@ -12,13 +13,14 @@ Minimal Python wrapper that:
 - `hub/proxy.py` — reverse-proxy (streaming)
 - `hub/ui.py` — static UI handler (`index.html.gz`, `loading.html`)
 - `hub/process.py` — `llama-server` lifecycle
+- `rag/` — local RAG (ingest, FAISS index, retrieval)
 - `static/` — UI assets copied from `tools/server/public/`
 
 ## Quick start
 
 ```bash
-python -m venv .venv
-. .venv/bin/activate
+python3 -m venv /runtime-data/llama-hub-venv
+. /runtime-data/llama-hub-venv/bin/activate
 pip install -r requirements.txt
 
 python -m hub.main \
@@ -30,6 +32,27 @@ Open:
 
 - `http://127.0.0.1:8081/` (default)
 - If you pass `--api-prefix /api` to `llama-server`, UI will be at `http://127.0.0.1:8081/api/`
+
+## RAG (local)
+
+RAG is enabled by default and intercepts only these endpoints:
+
+- `/v1/chat/completions`
+- `/v1/completions`
+- `/v1/responses`
+
+Default paths (can be overridden via CLI):
+
+- `--docs-dir /data/docsForLLM`
+- `--emb-model-path /data/multilingual-e5-small`
+- `--index-dir /data/index`
+
+Other RAG options:
+
+- `--rag-top-k`
+- `--chunk-size`
+- `--chunk-overlap`
+- `--rag-enabled 0|1`
 
 ### No-args setup mode
 

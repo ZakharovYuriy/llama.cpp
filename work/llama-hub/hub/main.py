@@ -13,6 +13,7 @@ from aiohttp import web
 from .process import ProcessManager
 from .proxy import HubProxy
 from .ui import UIAssets, resolve_static_dir
+from rag import RagConfig, RagEngine
 
 
 def extract_flag(args: List[str], flag: str) -> Optional[str]:
@@ -104,6 +105,23 @@ def parse_args() -> Tuple[argparse.Namespace, List[str]]:
         action="store_true",
         help="Disable redirect from / to api-prefix when api-prefix is set",
     )
+    parser.add_argument(
+        "--rag-enabled",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help="Enable local RAG injection (0 or 1)",
+    )
+    parser.add_argument("--docs-dir", default="/data/docsForLLM", help="Path to .txt/.md docs for RAG")
+    parser.add_argument(
+        "--emb-model-path",
+        default="/data/multilingual-e5-small",
+        help="Path to multilingual-e5-small model",
+    )
+    parser.add_argument("--index-dir", default="/data/index", help="Path to FAISS index directory")
+    parser.add_argument("--rag-top-k", type=int, default=5, help="Top-k chunks for RAG retrieval")
+    parser.add_argument("--chunk-size", type=int, default=1000, help="Chunk size in characters")
+    parser.add_argument("--chunk-overlap", type=int, default=200, help="Chunk overlap in characters")
 
     args, server_args = parser.parse_known_args()
     if server_args and server_args[0] == "--":
@@ -144,6 +162,62 @@ def build_ui_url(ui_host: str, ui_port: int, api_prefix: str) -> str:
     return f"http://{ui_host}:{ui_port}{prefix}/"
 
 
+def build_rag_engine(args: argparse.Namespace) -> Optional[RagEngine]:
+    if not args.rag_enabled:
+        logging.info("RAG disabled")
+        return None
+
+    missing = []
+    if not args.docs_dir:
+        missing.append("--docs-dir")
+    if not args.emb_model_path:
+        missing.append("--emb-model-path")
+    if not args.index_dir:
+        missing.append("--index-dir")
+    if missing:
+        raise SystemExit(f"RAG enabled but missing required args: {', '.join(missing)}")
+
+    config = RagConfig(
+        enabled=True,
+        docs_dir=Path(args.docs_dir),
+        emb_model_path=Path(args.emb_model_path),
+        index_dir=Path(args.index_dir),
+        top_k=args.rag_top_k,
+        chunk_size=args.chunk_size,
+        chunk_overlap=args.chunk_overlap,
+    )
+    config = config.resolved()
+
+    logging.info(
+        "RAG enabled: docs_dir=%s emb_model_path=%s index_dir=%s top_k=%s chunk_size=%s chunk_overlap=%s",
+        config.docs_dir,
+        config.emb_model_path,
+        config.index_dir,
+        config.top_k,
+        config.chunk_size,
+        config.chunk_overlap,
+    )
+
+    if not config.docs_dir.exists():
+        raise SystemExit(f"docs-dir not found: {config.docs_dir}")
+    if not config.emb_model_path.exists():
+        raise SystemExit(f"emb-model-path not found: {config.emb_model_path}")
+    if config.index_dir.exists() and not config.index_dir.is_dir():
+        raise SystemExit(f"index-dir is not a directory: {config.index_dir}")
+    if config.top_k < 1:
+        raise SystemExit("--rag-top-k must be >= 1")
+    if config.chunk_size < 1:
+        raise SystemExit("--chunk-size must be >= 1")
+    if config.chunk_overlap < 0:
+        raise SystemExit("--chunk-overlap must be >= 0")
+
+    rag_engine = RagEngine(config)
+    rag_engine.ensure_ready()
+    stats = rag_engine.stats()
+    logging.info("RAG ready: chunks=%s index_size=%s", stats["chunks"], stats["index_size"])
+    return rag_engine
+
+
 @dataclass
 class RuntimeState:
     server_bin: Optional[Path]
@@ -163,10 +237,12 @@ async def run() -> None:
         raise SystemExit(f"llama-server binary not found: {args.server_bin}")
 
     ui_assets = UIAssets(resolve_static_dir(args.static_dir))
+    rag_engine = build_rag_engine(args)
     proxy = HubProxy(
         backend_base=None,
         api_prefix="",
         ui_assets=ui_assets,
+        rag_engine=rag_engine,
         health_timeout=args.health_timeout,
         ssl_verify=args.backend_ssl_verify,
         redirect_root=not args.no_redirect_root,
